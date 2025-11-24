@@ -1,8 +1,8 @@
 ////////////////////////////////////////////////////////////////////////////////
-// fft.c --- TP6 :  transformée de Fourier multiple réelle-complexe 3D
+// fft.c --- TP6 :  transformï¿½e de Fourier multiple rï¿½elle-complexe 3D
 //
 // Auteur          : Jeremie Gaidamour (CNRS/IDRIS) <gaidamou@idris.fr>
-// Créé le         : Mon Aug 26 15:51:03 2013
+// Crï¿½ï¿½ le         : Mon Aug 26 15:51:03 2013
 // Dern. mod. par  : Jeremie Gaidamour (CNRS/IDRIS) <gaidamou@idris.fr>
 // Dern. mod. le   : Mon Aug 26 15:51:03 2013
 ////////////////////////////////////////////////////////////////////////////////
@@ -27,10 +27,10 @@
 extern void scfftm_(int* isign, int* n, int* lot, double* scale, double* x,         int* ldx, double complex* y, int* ldy, double* table, double* work, int* isys);
 extern void csfftm_(int* isign, int* n, int* lot, double* scale, double complex* x, int* ldx, double* y,         int* ldy, double* table, double* work, int* isys);
 
-// Inicialización aleatoria de una matriz
+// Inicializaciï¿½n aleatoria de una matriz
 void random_number(double* array, int size) {
   for(int i=0; i<size; i++) {
-    // Generación de un número de un intervalo de [0,1]
+    // Generaciï¿½n de un nï¿½mero de un intervalo de [0,1]
     double r = (double)rand() / (double)(RAND_MAX - 1);
     array[i] = r;
   }
@@ -49,75 +49,85 @@ int main() {
   fprintf(stdout, "\n\n   Ejecucion de fft en paralelo con %d hilos\n", nb_taches);
 #endif // _OPENMP
 
-  // Inicialización de la matriz x.
+  // Inicializaciï¿½n de la matriz x.
   random_number(&x[0], ldx*ny*nz);
   memcpy(xx, x, ldx*ny*nz*sizeof(double)); // xx = x
 
-  // Tiempo CPU de cálculo inicial.
+  // Tiempo CPU de cï¿½lculo inicial.
   clock_t t_cpu_0 = clock();
 
   // Tiempo elapsado de referencia.
   struct timeval t_elapsed_0;
   gettimeofday(&t_elapsed_0, NULL);
 
-  // Cálculo de la FFT (si es en paralelo, se procesa una rebanada de elementos por tarea).
-  #pragma omp ......................................................
+  // CÃ¡lculo de la FFT (si es en paralelo, se procesa una rebanada de elementos por tarea).
+  #pragma omp parallel
   {
-    // int z_inicio, z_fin, z_rebanada;
     int z_debut, z_fin, z_tranche;
 
-#ifndef _OPENMP
-
-    // Inicialización para el caso de ejecución secuencial
-    z_tranche = nz;
-    z_debut   = 0;
-    z_fin     = nz-1;
-
+#ifdef _OPENMP
+    int tid = omp_get_thread_num();
+    int nthreads = omp_get_num_threads();
 #else
+    int tid = 0;
+    int nthreads = 1;
+#endif
 
-    // Determinación del rango de una tarea
-    int rango = ...
+    int base = nz / nthreads;
+    int rem  = nz % nthreads;
 
-    // Determinación del número total de tareas
-    // int num_tareas = ...
+    if (tid < rem) {
+      z_tranche = base + 1;
+      z_debut   = tid * z_tranche;
+    } else {
+      z_tranche = base;
+      z_debut   = tid * z_tranche + rem;
+    }
+    z_fin = (z_tranche > 0) ? (z_debut + z_tranche - 1) : (z_debut - 1);
 
-    // Calculo del numero de elementos e índices de inicio y fin
-    // de una rebanada en la dirección z.
-    // ...
+    if (z_tranche <= 0) {
+      // Nada que hacer para este hilo
+    } else {
+      // AlocaciÃ³n dinÃ¡mica de memoria de matrices de trabajo y temporales (por hilo)
+      double*         work   = (double*)        malloc(((2*nx+4)*ny*z_tranche)* sizeof(double));
+      double*         temp_x = (double*)        malloc((ldx*ny*z_tranche)     * sizeof(double));
+      double complex* temp_y = (double complex*)malloc((ldy*ny*z_tranche)     * sizeof(double complex));
+      double*         table  = (double*)        malloc((100+2*nx)             * sizeof(double));
 
-#endif // _OPENMP
+      if (!work || !temp_x || !temp_y || !table) {
+        fprintf(stderr, "Error: asignaciÃ³n de memoria fallÃ³ en tid=%d\n", tid);
+        if (work) free(work);
+        if (temp_x) free(temp_x);
+        if (temp_y) free(temp_y);
+        if (table) free(table);
+        // No podemos salir del hilo fÃ¡cilmente; simplemente saltamos.
+      } else {
+        int code = 0;
 
+        // DefiniciÃ³n de constantes para llamar a las rutinas de Fortran
+        int    zero = 0, one  = 1, minus_one = -1;
+        double d_one = 1.0;
+        double inv_nx = 1.0/nx;
+        int    lot = ny * z_tranche;
 
-    // Alocación dinámica de memoria de matrices de 
-    // trabajo y temporales.
-    double*         work   = (double*)        malloc(((2*nx+4)*ny*z_tranche)* sizeof(double));
-    double*         temp_x = (double*)        malloc((ldx*ny*z_tranche)     * sizeof(double));
-    double complex* temp_y = (double complex*)malloc((ldy*ny*z_tranche)     * sizeof(double complex));
+        // InicializaciÃ³n de la tabla de coeficientes trigonomÃ©tricos para esta tarea (por hilo)
+        scfftm_(&zero, &nx, &lot, &d_one, &x[z_debut*ldx*ny], &ldx, (double complex*)&x[z_debut*ldx*ny], &ldy, table, work, &code);
 
-    int code = 0;
+        // CÃ¡lculo de la FFT directo en paralelo (trabajando sobre la rebancha local)
+        memcpy(temp_x, &x[z_debut*ldx*ny], (ldx*ny*z_tranche)*sizeof(double)); // temp_x(:,:,:)=x(:,:,z_debut:z_fin)
+        scfftm_(&one, &nx, &lot, &d_one, temp_x, &ldx, temp_y, &ldy, table, work, &code);
 
-    // Definición de constantes para llamar a las rutinas de Fortran
-    int    zero = 0, one  = 1, minus_one = -1;
-    double d_one = 1.0;
-    double inv_nx = 1.0/nx;
-    int    lot = ny*z_tranche;
+        // CÃ¡lculo de la FFT inversa en paralelo
+        csfftm_(&minus_one, &nx, &lot, &inv_nx, temp_y, &ldy, temp_x, &ldx, table, work, &code);
+        memcpy(&x[z_debut*ldx*ny], temp_x, (ldx*ny*z_tranche)*sizeof(double)); // x(:,:,z_debut:z_fin)=temp_x(:,:,:);
 
-    // Inicialización de la tabla de coeficientes trigonométricos para una sola tarea
-#pragma omp ......................................................
-    scfftm_(&zero, &nx, &lot, &d_one, x, &ldx, (double complex*)x, &ldy, table, work, &code);
-
-    // Calculo de la FFT directo en paralelo
-    memcpy(temp_x, x+(z_debut*ldx*ny), (ldx*ny*z_tranche)*sizeof(double)); // temp_x(:,:,:)=x(:,:,z_debut:z_fin)
-    scfftm_(&one, &nx, &lot, &d_one, temp_x, &ldx, temp_y, &ldy, table, work, &code);
-
-    // Calculo de la FFT inversa en paralelo
-    csfftm_(&minus_one, &nx, &lot, &inv_nx, temp_y, &ldy, temp_x, &ldx, table, work, &code);
-    memcpy(x+(z_debut*ldx*ny), temp_x, (ldx*ny*z_tranche)*sizeof(double)); // x(:,:,z_debut:z_fin)=temp_x(:,:,:);
-
-    // Liberación de memoria alocada para las matrices
-    free(work);
-    free(temp_x);
-    free(temp_y);
+        // LiberaciÃ³n de memoria alocada para las matrices
+        free(work);
+        free(temp_x);
+        free(temp_y);
+        free(table);
+      }
+    }
 
   } // omp end parallel
 
@@ -130,7 +140,7 @@ int main() {
   clock_t t_cpu_1 = clock();
   double t_cpu = (t_cpu_1 - t_cpu_0) / (double)CLOCKS_PER_SEC;
 
-  // Verificación de resultados.
+  // Verificaciï¿½n de resultados.
   // ecart = maxval(abs(x(1:nx,1:ny,1:nz) - xx(1:nx,1:ny,1:nz)))/real(nx*ny*nz,kind=8)
   // ecart -> error
   double ecart = 0;
@@ -141,7 +151,7 @@ int main() {
   }
   ecart /= nx*ny*nz;
 
-  // Impresión de resultados
+  // Impresiï¿½n de resultados
   fprintf(stdout, "\n\n"
 	  "   Error FFT |Directo - Inversa| : %10.3E\n"
 	  "   Tiempo transcurrido        : %10.3E seg.\n"
